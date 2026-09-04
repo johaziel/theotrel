@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Carte de relief — Plancher</title>
+<style>
+  :root{
+    --ink:#1c1f1a;
+    --paper:#f6f4ee;
+    --line:#d8d3c4;
+    --accent:#3d5a3d;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family: 'Georgia', 'Iowan Old Style', serif;
+    background:var(--paper);
+    color:var(--ink);
+    padding:28px 20px 40px;
+  }
+  h1{
+    font-size:1.5rem;
+    font-weight:600;
+    margin:0 0 4px;
+    letter-spacing:.2px;
+  }
+  .sub{
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size:.85rem;
+    color:#5c5a4f;
+    margin:0 0 22px;
+    max-width:640px;
+    line-height:1.5;
+  }
+  .wrap{
+    display:flex;
+    gap:28px;
+    flex-wrap:wrap;
+    align-items:flex-start;
+  }
+  .panel{
+    background:#fff;
+    border:1px solid var(--line);
+    border-radius:4px;
+    padding:16px;
+  }
+  canvas{
+    display:block;
+    cursor:crosshair;
+  }
+  .legend-title{
+    font-family:'Helvetica Neue', Arial, sans-serif;
+    font-size:.72rem;
+    text-transform:uppercase;
+    letter-spacing:.06em;
+    color:#7a7768;
+    margin:0 0 10px;
+  }
+  .legend-row{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-family:'Helvetica Neue', Arial, sans-serif;
+    font-size:.82rem;
+    margin-bottom:5px;
+  }
+  .swatch{
+    width:18px;height:14px;
+    border:1px solid rgba(0,0,0,.15);
+    flex:none;
+  }
+  .stats{
+    margin-top:18px;
+    padding-top:14px;
+    border-top:1px solid var(--line);
+    font-family:'Helvetica Neue', Arial, sans-serif;
+    font-size:.82rem;
+    line-height:1.7;
+  }
+  .stats b{color:var(--accent);}
+  #tooltip{
+    position:fixed;
+    pointer-events:none;
+    background:#1c1f1a;
+    color:#f6f4ee;
+    font-family:'Helvetica Neue', Arial, sans-serif;
+    font-size:.78rem;
+    padding:6px 9px;
+    border-radius:3px;
+    opacity:0;
+    transition:opacity .1s;
+    white-space:nowrap;
+    z-index:10;
+  }
+</style>
+</head>
+<body>
+
+<h1>Relevé de niveau du plancher</h1>
+<p class="sub">Chaque cellule est colorée selon l'écart au point le plus haut (0&nbsp;mm), par tranches de 5&nbsp;mm. Les zones rouges/violettes sont les creux les plus profonds — c'est là qu'il faudra le plus de ragréage. Le calepinage des liteaux (traits marron, entraxe 400&nbsp;mm) et des panneaux OSB (traits fins) est superposé, en partant du point (0, -3200). Le joint entre la rangée pleine et la bande de retour (pointillé) n'a pas de liteau dédié — tasseau à ajouter au cas par cas selon la longueur des chutes réutilisées. Survolez la carte pour voir la valeur exacte à chaque point mesuré.</p>
+
+<div class="wrap">
+  <div class="panel">
+    <canvas id="cv"></canvas>
+  </div>
+  <div class="panel" style="min-width:220px;">
+    <p class="legend-title">Profondeur du creux (mm)</p>
+    <div id="legend"></div>
+    <div class="stats" id="stats"></div>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+const raw = `0,0,0
+500,0,-10
+1000,0,-13
+1500,0,-22
+2000,0,-27
+2500,0,-29
+3000,0,-25
+3500,0,-25
+4000,0,-15
+4400,0,-5
+0,-500,0
+500,-500,-20
+1000,-500,-22
+1500,-500,-32
+2000,-500,-35
+2500,-500,-37
+3000,-500,-34
+3500,-500,-32
+4000,-500,-21
+4400,-500,-7
+0,-1000,-4
+500,-1000,-25
+1000,-1000,-32
+1500,-1000,-42
+2000,-1000,-40
+2500,-1000,-41
+3000,-1000,-44
+3500,-1000,-42
+4000,-1000,-27
+4400,-1000,-11
+0,-1500,-12
+500,-1500,-27
+1000,-1500,-32
+1500,-1500,-45
+2000,-1500,-45
+2500,-1500,-45
+3000,-1500,-47
+3500,-1500,-42
+4000,-1500,-27
+4400,-1500,-15
+0,-2000,-12
+500,-2000,-25
+1000,-2000,-34
+1500,-2000,-43
+2000,-2000,-45
+2500,-2000,-50
+3000,-2000,-46
+3500,-2000,-41
+4000,-2000,-31
+4400,-2000,-21
+0,-2500,-11
+500,-2500,-24
+1000,-2500,-33
+1500,-2500,-37
+2000,-2500,-47
+2500,-2500,-50
+3000,-2500,-47
+3500,-2500,-40
+4000,-2500,-34
+4400,-2500,-22
+0,-3000,-10
+500,-3000,-21
+1000,-3000,-27
+1500,-3000,-34
+2000,-3000,-40
+2500,-3000,-44
+3000,-3000,-42
+3500,-3000,-35
+4000,-3000,-32
+4400,-3000,-20
+0,-3200,-6
+500,-3200,-21
+1000,-3200,-28
+1500,-3200,-32
+2000,-3200,-35
+2500,-3200,-39
+3000,-3200,-35
+3500,-3200,-30
+4000,-3200,-30
+4400,-3200,-20`;
+
+const points = raw.trim().split('\n').map(l=>{
+  const [x,y,z] = l.split(',').map(Number);
+  return {x,y,z};
+});
+
+const xs = [...new Set(points.map(p=>p.x))].sort((a,b)=>a-b);
+const ys = [...new Set(points.map(p=>p.y))].sort((a,b)=>b-a); // 0 down to -3200
+
+const grid = ys.map(y => xs.map(x => {
+  const pt = points.find(p=>p.x===x && p.y===y);
+  return pt ? pt.z : 0;
+}));
+
+// bands (depth = |z|), 5mm steps, 0 to 50
+const bandColors = [
+  '#2e7d46','#6a9a3f','#a3b93a','#d4c531',
+  '#f2c12e','#f2a02e','#ef7f2b','#e8592c',
+  '#c62828','#6a1b9a'
+];
+function colorFor(z){
+  const depth = Math.abs(z);
+  let idx = Math.floor(depth/5);
+  if(idx > 9) idx = 9;
+  if(idx < 0) idx = 0;
+  return bandColors[idx];
+}
+
+// bilinear interpolation over the irregular-but-monotonic grid
+function bilerp(px, py){
+  // find x interval
+  let xi=0; while(xi < xs.length-2 && xs[xi+1] < px) xi++;
+  let yi=0; while(yi < ys.length-2 && ys[yi+1] > py) yi++;
+  const x0=xs[xi], x1=xs[xi+1];
+  const y0=ys[yi], y1=ys[yi+1];
+  const tx = (x1-x0)===0 ? 0 : (px-x0)/(x1-x0);
+  const ty = (y1-y0)===0 ? 0 : (py-y0)/(y1-y0);
+  const z00=grid[yi][xi], z10=grid[yi][xi+1];
+  const z01=grid[yi+1][xi], z11=grid[yi+1][xi+1];
+  const top = z00 + (z10-z00)*tx;
+  const bot = z01 + (z11-z01)*tx;
+  return top + (bot-top)*ty;
+}
+
+const marginL=50, marginT=20, marginB=40, marginR=20;
+const xMax = xs[xs.length-1], yMin = ys[ys.length-1]; // most negative
+const plotW = 620, plotH = plotW * (Math.abs(yMin)/xMax);
+const canvas = document.getElementById('cv');
+canvas.width = plotW + marginL + marginR;
+canvas.height = plotH + marginT + marginB;
+const ctx = canvas.getContext('2d');
+
+// --- calepinage: liteaux perpendiculaires a la longueur des OSB, entraxe 400mm, ancre en (0,-3200)
+const battenYs = [];
+{
+  let y = yMin; // -3200, point de depart
+  while (y < 0) { battenYs.push(y); y += 400; }
+  battenYs.push(0);
+}
+const rowSplitY = yMin + 2500; // -700, joint entre la rangee pleine et la bande de retour (repere visuel uniquement)
+// colonnes de panneaux OSB, largeur 625mm, longueur (2500mm) dans le sens de la largeur de piece (Y)
+const panelColW = 625;
+const panelCols = [];
+{
+  let x = 0;
+  while (x < xMax) { panelCols.push(x); x += panelColW; }
+  panelCols.push(xMax);
+}
+
+const cell = 6; // supersample resolution in px
+for(let py=0; py<plotH; py+=cell){
+  for(let px=0; px<plotW; px+=cell){
+    const worldX = (px/plotW) * xMax;
+    const worldY = (py/plotH) * yMin; // yMin negative
+    const z = bilerp(worldX, worldY);
+    ctx.fillStyle = colorFor(z);
+    ctx.fillRect(marginL+px, marginT+py, cell+1, cell+1);
+  }
+}
+
+// panneaux OSB : traits fins verticaux (joints entre panneaux, largeur 625mm)
+ctx.strokeStyle = 'rgba(255,255,255,.55)';
+ctx.lineWidth = 1;
+panelCols.forEach(x=>{
+  const px = marginL + (x/xMax)*plotW;
+  ctx.beginPath(); ctx.moveTo(px, marginT); ctx.lineTo(px, marginT+plotH); ctx.stroke();
+});
+// joint entre la rangée pleine et la bande de retour
+{
+  const py = marginT + (rowSplitY/yMin)*plotH;
+  ctx.setLineDash([4,3]);
+  ctx.beginPath(); ctx.moveTo(marginL, py); ctx.lineTo(marginL+plotW, py); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// liteaux : traits marron horizontaux, perpendiculaires à la longueur des panneaux, entraxe 500mm
+ctx.strokeStyle = '#5a3a1a';
+ctx.lineWidth = 3;
+battenYs.forEach(y=>{
+  const py = marginT + (y/yMin)*plotH;
+  ctx.beginPath(); ctx.moveTo(marginL, py); ctx.lineTo(marginL+plotW, py); ctx.stroke();
+});
+
+// point de départ (0, -3200)
+{
+  const px0 = marginL + (0/xMax)*plotW;
+  const py0 = marginT + (yMin/yMin)*plotH;
+  ctx.beginPath();
+  ctx.arc(px0, py0, 5, 0, Math.PI*2);
+  ctx.fillStyle = '#fff';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#1c1f1a';
+  ctx.stroke();
+  ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
+  ctx.fillStyle = '#1c1f1a';
+  ctx.textAlign = 'left';
+  ctx.fillText('départ', px0+9, py0+4);
+}
+
+// axes
+ctx.strokeStyle = '#1c1f1a';
+ctx.fillStyle = '#1c1f1a';
+ctx.font = '11px Helvetica, Arial, sans-serif';
+ctx.lineWidth = 1;
+ctx.strokeRect(marginL, marginT, plotW, plotH);
+xs.forEach(x=>{
+  const px = marginL + (x/xMax)*plotW;
+  ctx.beginPath(); ctx.moveTo(px, marginT+plotH); ctx.lineTo(px, marginT+plotH+4); ctx.stroke();
+  ctx.textAlign='center';
+  ctx.fillText(x, px, marginT+plotH+16);
+});
+ys.forEach(y=>{
+  const py = marginT + (y/yMin)*plotH;
+  ctx.beginPath(); ctx.moveTo(marginL-4, py); ctx.lineTo(marginL, py); ctx.stroke();
+  ctx.textAlign='right';
+  ctx.fillText(y, marginL-7, py+3);
+});
+ctx.textAlign='center';
+ctx.fillText('X (mm)', marginL+plotW/2, marginT+plotH+32);
+ctx.save();
+ctx.translate(14, marginT+plotH/2);
+ctx.rotate(-Math.PI/2);
+ctx.fillText('Y (mm)', 0, 0);
+ctx.restore();
+
+// mark measured points
+points.forEach(p=>{
+  const px = marginL + (p.x/xMax)*plotW;
+  const py = marginT + (p.y/yMin)*plotH;
+  ctx.beginPath();
+  ctx.arc(px, py, 2, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(0,0,0,.35)';
+  ctx.fill();
+});
+
+// legend
+const legendDiv = document.getElementById('legend');
+for(let i=0;i<10;i++){
+  const row = document.createElement('div');
+  row.className='legend-row';
+  row.innerHTML = `<span class="swatch" style="background:${bandColors[i]}"></span> ${i*5}–${i*5+5} mm`;
+  legendDiv.appendChild(row);
+}
+const calageNote = document.createElement('div');
+calageNote.style.cssText = 'margin-top:14px;padding-top:12px;border-top:1px solid #d8d3c4;font-family:Helvetica,Arial,sans-serif;font-size:.78rem;line-height:1.6;color:#5c5a4f;';
+calageNote.innerHTML = `<span style="display:inline-block;width:18px;height:3px;background:#5a3a1a;vertical-align:middle;margin-right:6px;"></span>Liteaux (entraxe 400&nbsp;mm)<br><span style="display:inline-block;width:18px;height:3px;background:#cfc7ae;vertical-align:middle;margin-right:6px;"></span>Joints panneaux OSB (625&nbsp;mm)<br>Départ à (0, ${yMin}) → joint rangée/retour à Y=${yMin+2500} (tasseau local à ajouter selon chutes)`;
+legendDiv.parentElement.appendChild(calageNote);
+
+// stats
+const zs = points.map(p=>p.z);
+const minZ = Math.min(...zs), maxZ = Math.max(...zs);
+const meanDepth = zs.reduce((s,v)=>s+Math.abs(v),0)/zs.length;
+const areaM2 = (xMax/1000) * (Math.abs(yMin)/1000);
+const volumeL = areaM2 * meanDepth; // 1mm sur 1m2 = 1L
+document.getElementById('stats').innerHTML = `
+  Point le plus bas : <b>${minZ} mm</b><br>
+  Point le plus haut : <b>${maxZ} mm</b><br>
+  Creux moyen : <b>${meanDepth.toFixed(1)} mm</b><br>
+  Surface couverte : <b>${areaM2.toFixed(1)} m²</b><br>
+  Ragréage estimé : <b>≈ ${volumeL.toFixed(0)} L</b>
+  <div style="font-size:.72rem;color:#9a9686;margin-top:6px;">(estimation grossière, en supposant un ragréage jusqu'au point le plus haut)</div>
+`;
+
+// tooltip
+const tooltip = document.getElementById('tooltip');
+canvas.addEventListener('mousemove', e=>{
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left - marginL;
+  const my = e.clientY - rect.top - marginT;
+  if(mx<0||my<0||mx>plotW||my>plotH){ tooltip.style.opacity=0; return; }
+  const worldX = (mx/plotW)*xMax;
+  const worldY = (my/plotH)*yMin;
+  // snap to nearest real point for a clean readout
+  let nearest = points[0], best = Infinity;
+  points.forEach(p=>{
+    const d = (p.x-worldX)**2 + (p.y-worldY)**2;
+    if(d<best){best=d; nearest=p;}
+  });
+  tooltip.style.opacity = 1;
+  tooltip.style.left = (e.clientX+14)+'px';
+  tooltip.style.top = (e.clientY+14)+'px';
+  tooltip.innerHTML = `X ${nearest.x} · Y ${nearest.y} → <b>${nearest.z} mm</b>`;
+});
+canvas.addEventListener('mouseleave', ()=> tooltip.style.opacity=0);
+</script>
+</body>
+</html>
