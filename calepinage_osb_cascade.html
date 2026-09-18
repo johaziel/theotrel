@@ -38,6 +38,14 @@
   <div class="field"><label>Longueur plaque (mm)</label><input type="number" id="panelLen" value="2500"></div>
   <div class="field"><label>Largeur plaque (mm)</label><input type="number" id="panelW" value="625"></div>
   <div class="field"><label>Longueur du 1er morceau (mm)</label><input type="number" id="startLen" value="2500"></div>
+  <div class="field"><label>Largeur du 1er morceau (mm)</label><input type="number" id="startWidth" value="625"></div>
+  <div class="field">
+    <label>Sens de pose</label>
+    <select id="orientation" style="padding:5px 7px;font-size:.9rem;border:1px solid var(--line);border-radius:3px;">
+      <option value="x">Longueur plaque sur la longueur piece (X)</option>
+      <option value="y" selected>Longueur plaque sur la largeur piece (Y)</option>
+    </select>
+  </div>
 </div>
 
 <div class="wrap">
@@ -61,7 +69,9 @@ var els = {
   roomY: document.getElementById('roomY'),
   panelLen: document.getElementById('panelLen'),
   panelW: document.getElementById('panelW'),
-  startLen: document.getElementById('startLen')
+  startLen: document.getElementById('startLen'),
+  startWidth: document.getElementById('startWidth'),
+  orientation: document.getElementById('orientation')
 };
 var canvas = document.getElementById('cv');
 var ctx = canvas.getContext('2d');
@@ -74,49 +84,66 @@ function compute(){
   var panelLen = Math.max(1, Number(els.panelLen.value) || 0);
   var panelW = Math.max(1, Number(els.panelW.value) || 0);
   var startLen = Number(els.startLen.value) || 0;
+  var startWidth = Number(els.startWidth.value) || 0;
+  var colsAlongX = els.orientation.value === 'y'; // longueur plaque sur Y => colonnes decoupees dans X
   if (startLen <= 0) startLen = panelLen;
   if (startLen > panelLen) startLen = panelLen;
+  if (startWidth <= 0) startWidth = panelW;
+  if (startWidth > panelW) startWidth = panelW;
 
-  var numCols = Math.ceil(roomX / panelW);
+  var colDimTotal = colsAlongX ? roomX : roomY;      // dimension decoupee en colonnes (largeur de plaque)
+  var cascadeDimTotal = colsAlongX ? roomY : roomX;  // dimension remplie en cascade (longueur de plaque)
+
+  // --- decoupage des colonnes le long de colDimTotal ---
+  var colWidths = [];
+  var used = 0;
+  var first = true;
+  while (used < colDimTotal - 0.001){
+    var w = first ? Math.min(startWidth, colDimTotal - used) : Math.min(panelW, colDimTotal - used);
+    colWidths.push(w);
+    used += w;
+    first = false;
+  }
+
   var cols = [];
   var carry = startLen;
   var freshCount = 0;
   var wasteFirstCut = panelLen - startLen;
+  var colPos = 0;
 
-  for (var c = 0; c < numCols; c++){
-    var colX0 = c * panelW;
-    var colWidth = Math.min(panelW, roomX - colX0);
+  for (var c = 0; c < colWidths.length; c++){
+    var cw = colWidths[c];
     var pieces = [];
     var pos = 0;
     var pieceLen = carry;
-    var isCarried = (c > 0); // premier morceau de cette colonne vient-il d'une chute ?
+    var isCarried = (c > 0);
     var firstPieceOfCol = true;
 
-    while (pos < roomY - 0.001){
+    while (pos < cascadeDimTotal - 0.001){
       var fromFresh = !(firstPieceOfCol && isCarried);
       if (fromFresh) freshCount++;
       var end = pos + pieceLen;
-      if (end >= roomY - 0.001){
-        // ce morceau termine la colonne : on le coupe pile a la longueur necessaire
-        var used = roomY - pos;
-        var chute = pieceLen - used;
-        pieces.push({ start: pos, len: used, type: (firstPieceOfCol && isCarried) ? 'carried' : (chute > 0.5 ? 'cut' : 'full') });
-        pos = roomY;
-        carry = chute > 0.5 ? chute : panelLen; // chute reutilisee, sinon colonne suivante repart a neuf
+      if (end >= cascadeDimTotal - 0.001){
+        var usedLen = cascadeDimTotal - pos;
+        var chute = pieceLen - usedLen;
+        pieces.push({ pos: pos, len: usedLen, type: (firstPieceOfCol && isCarried) ? 'carried' : (chute > 0.5 ? 'cut' : 'full') });
+        pos = cascadeDimTotal;
+        carry = chute > 0.5 ? chute : panelLen;
       } else {
-        pieces.push({ start: pos, len: pieceLen, type: (firstPieceOfCol && isCarried) ? 'carried' : 'full' });
+        pieces.push({ pos: pos, len: pieceLen, type: (firstPieceOfCol && isCarried) ? 'carried' : 'full' });
         pos = end;
-        pieceLen = panelLen; // prochain morceau = plaque neuve
+        pieceLen = panelLen;
       }
       firstPieceOfCol = false;
     }
-    cols.push({ x0: colX0, width: colWidth, pieces: pieces });
+    cols.push({ colPos: colPos, colWidth: cw, pieces: pieces });
+    colPos += cw;
   }
 
-  var finalWaste = carry < panelLen ? carry : 0; // chute finale non reutilisee
+  var finalWaste = carry < panelLen ? carry : 0;
 
-  return { roomX:roomX, roomY:roomY, panelLen:panelLen, panelW:panelW, startLen:startLen,
-           numCols:numCols, cols:cols, freshCount:freshCount, wasteFirstCut:wasteFirstCut, finalWaste:finalWaste };
+  return { roomX:roomX, roomY:roomY, panelLen:panelLen, panelW:panelW, startLen:startLen, startWidth:startWidth,
+           colsAlongX:colsAlongX, cols:cols, freshCount:freshCount, wasteFirstCut:wasteFirstCut, finalWaste:finalWaste };
 }
 
 function draw(data){
@@ -132,23 +159,32 @@ function draw(data){
   var sx = plotW/data.roomX, sy = plotH/data.roomY;
 
   data.cols.forEach(function(col){
-    var x0 = marginL + col.x0*sx;
-    var w = col.width*sx;
+    // colPos/colWidth = axe colonnes ; piece.pos/len = axe cascade
+    var x0, w, sxUsed;
+    if (data.colsAlongX){
+      x0 = marginL + col.colPos*sx; w = col.colWidth*sx;
+    } else {
+      x0 = null; w = null;
+    }
     col.pieces.forEach(function(p, i){
-      var y0 = marginT + p.start*sy;
-      var h = p.len*sy;
+      var rect;
+      if (data.colsAlongX){
+        rect = { x: marginL + col.colPos*sx, y: marginT + p.pos*sy, w: col.colWidth*sx, h: p.len*sy };
+      } else {
+        rect = { x: marginL + p.pos*sx, y: marginT + col.colPos*sy, w: p.len*sx, h: col.colWidth*sy };
+      }
       ctx.fillStyle = p.type==='carried' ? '#f0e6d8' : (i % 2 === 0 ? '#eae4d3' : '#e2dcc9');
-      ctx.fillRect(x0, y0, w-1, h-1);
+      ctx.fillRect(rect.x, rect.y, rect.w-1, rect.h-1);
       ctx.strokeStyle = '#8a6240';
       ctx.lineWidth = 1;
-      ctx.strokeRect(x0, y0, w-1, h-1);
-      if (h > 14){
+      ctx.strokeRect(rect.x, rect.y, rect.w-1, rect.h-1);
+      if (rect.w > 14 && rect.h > 14){
         ctx.fillStyle = '#1c1f1a';
         ctx.font = '10px Helvetica, Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.save();
-        ctx.translate(x0+w/2, y0+h/2);
-        if (w < 40) ctx.rotate(-Math.PI/2);
+        ctx.translate(rect.x+rect.w/2, rect.y+rect.h/2);
+        if (rect.w < 40) ctx.rotate(-Math.PI/2);
         ctx.fillText(Math.round(p.len)+'mm', 0, 3);
         ctx.restore();
       }
@@ -162,10 +198,7 @@ function draw(data){
   ctx.font = '10px Helvetica, Arial, sans-serif';
   ctx.fillStyle = '#1c1f1a';
   ctx.textAlign = 'center';
-  data.cols.forEach(function(col){
-    var xc = marginL + (col.x0+col.width/2)*sx;
-    ctx.fillText(Math.round(col.x0), marginL + col.x0*sx, marginT+plotH+14);
-  });
+  ctx.fillText('0', marginL, marginT+plotH+14);
   ctx.fillText(Math.round(data.roomX), marginL+plotW, marginT+plotH+14);
   ctx.save();
   ctx.translate(14, marginT+plotH/2);
@@ -176,14 +209,15 @@ function draw(data){
 }
 
 function renderTable(data){
-  var html = '<table><thead><tr><th>Colonne</th><th>X</th><th>Morceaux (bas vers haut)</th></tr></thead><tbody>';
+  var axisLabel = data.colsAlongX ? 'X' : 'Y';
+  var html = '<table><thead><tr><th>Colonne</th><th>'+axisLabel+'</th><th>Morceaux (dans le sens de la longueur de plaque)</th></tr></thead><tbody>';
   data.cols.forEach(function(col, i){
     var descr = col.pieces.map(function(p){
       var cls = p.type==='carried' ? 'carried' : 'fresh';
       var tag = p.type==='carried' ? ' (chute reprise)' : (p.type==='cut' ? ' (coupee)' : ' (pleine)');
       return '<span class="'+cls+'">'+Math.round(p.len)+' mm'+tag+'</span>';
     }).join(' + ');
-    html += '<tr><td class="col-label">'+(i+1)+'</td><td>'+Math.round(col.x0)+' - '+Math.round(col.x0+col.width)+'</td><td style="text-align:left;padding-left:10px;">'+descr+'</td></tr>';
+    html += '<tr><td class="col-label">'+(i+1)+'</td><td>'+Math.round(col.colPos)+' - '+Math.round(col.colPos+col.colWidth)+'</td><td style="text-align:left;padding-left:10px;">'+descr+'</td></tr>';
   });
   html += '</tbody></table>';
   html += '<p style="font-family:Helvetica,Arial,sans-serif;font-size:.72rem;color:#8a7c5c;margin-top:8px;">Marron italique = morceau recupere de la chute de la colonne precedente. Le dernier morceau de chaque colonne, sil nest pas une plaque pleine, genere la chute utilisee au debut de la colonne suivante.</p>';
@@ -191,8 +225,9 @@ function renderTable(data){
 }
 
 function renderSummary(data){
+  var last = data.cols[data.cols.length-1];
   summaryEl.innerHTML =
-    '<b>' + data.numCols + ' colonnes</b> de ' + data.panelW + ' mm (derniere: ' + Math.round(data.cols[data.cols.length-1].width) + ' mm)<br>' +
+    '<b>' + data.cols.length + ' colonnes</b> de ' + data.panelW + ' mm (1ere: ' + Math.round(data.cols[0].colWidth) + ' mm, derniere: ' + Math.round(last.colWidth) + ' mm)<br>' +
     '<b>' + data.freshCount + ' plaques neuves</b> entamees au total<br>' +
     'Chute du 1er decoupe (non reutilisee dans la cascade) : ' + Math.round(data.wasteFirstCut) + ' mm<br>' +
     'Chute finale en fin de derniere colonne : ' + Math.round(data.finalWaste) + ' mm';
@@ -205,7 +240,10 @@ function update(){
   renderSummary(data);
 }
 
-Object.keys(els).forEach(function(k){ els[k].addEventListener('input', update); });
+Object.keys(els).forEach(function(k){
+  var evt = (k === 'orientation') ? 'change' : 'input';
+  els[k].addEventListener(evt, update);
+});
 update();
 
 })();
