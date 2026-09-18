@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Calepinage OSB en cascade</title>
+<style>
+  :root{ --ink:#1c1f1a; --paper:#f6f4ee; --line:#d8d3c4; }
+  *{box-sizing:border-box;}
+  body{ margin:0; font-family:Georgia, serif; background:var(--paper); color:var(--ink); padding:28px 20px 50px; }
+  h1{font-size:1.4rem;margin:0 0 4px;}
+  .sub{ font-family:Helvetica, Arial, sans-serif; font-size:.85rem;color:#5c5a4f; max-width:720px;line-height:1.55;margin:0 0 20px; }
+  .controls{ display:flex; flex-wrap:wrap; gap:18px; background:#fff; border:1px solid var(--line); border-radius:4px; padding:16px 18px; margin-bottom:22px; max-width:900px; font-family:Helvetica, Arial, sans-serif; }
+  .field{ display:flex; flex-direction:column; gap:4px; }
+  .field label{ font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; color:#7a7768; }
+  .field input{ width:100px; padding:5px 7px; font-size:.9rem; border:1px solid var(--line); border-radius:3px; }
+  .wrap{ display:flex; gap:26px; flex-wrap:wrap; align-items:flex-start; }
+  .panel-box{ background:#fff; border:1px solid var(--line); border-radius:4px; padding:16px; }
+  canvas{ display:block; }
+  .side{ width:300px; font-family:Helvetica, Arial, sans-serif; font-size:.82rem; line-height:1.6; }
+  .note{ background:#fff; border:1px solid var(--line); border-radius:4px; padding:14px 16px; margin-bottom:16px; }
+  .note b{ color:#5a3a1a; }
+  table{ border-collapse:collapse; width:100%; font-family:Helvetica, Arial, sans-serif; font-size:.76rem; margin-top:24px; max-width:900px; }
+  th,td{ border:1px solid var(--line); padding:5px 7px; text-align:center; }
+  th{ background:#efece2; font-weight:600; }
+  td.col-label{ background:#efece2; font-weight:600; }
+  .fresh{ color:#1c1f1a; }
+  .carried{ color:#8a6240; font-style:italic; }
+</style>
+</head>
+<body>
+
+<h1>Calepinage OSB en cascade</h1>
+<p class="sub">Chaque colonne (largeur = largeur de plaque) est remplie dans le sens de la longueur de la pièce. La chute de fin de colonne devient automatiquement le premier morceau de la colonne suivante. Modifiez la longueur de départ pour voir où tombent toutes les jonctions.</p>
+
+<div class="controls">
+  <div class="field"><label>Longueur pièce (X, mm)</label><input type="number" id="roomX" value="4400"></div>
+  <div class="field"><label>Largeur pièce (Y, mm)</label><input type="number" id="roomY" value="3200"></div>
+  <div class="field"><label>Longueur plaque (mm)</label><input type="number" id="panelLen" value="2500"></div>
+  <div class="field"><label>Largeur plaque (mm)</label><input type="number" id="panelW" value="625"></div>
+  <div class="field"><label>Longueur du 1er morceau (mm)</label><input type="number" id="startLen" value="2500"></div>
+</div>
+
+<div class="wrap">
+  <div class="panel-box"><canvas id="cv"></canvas></div>
+  <div class="side">
+    <div class="note" id="summary"></div>
+    <div class="note">
+      <b>Lecture du plan</b><br>
+      Chaque colonne = une largeur de plaque. Les traits fins horizontaux = jonctions entre morceaux. Le morceau en italique/marron = chute récupérée de la colonne précédente.
+    </div>
+  </div>
+</div>
+
+<div id="tableHost"></div>
+
+<script>
+(function(){
+
+var els = {
+  roomX: document.getElementById('roomX'),
+  roomY: document.getElementById('roomY'),
+  panelLen: document.getElementById('panelLen'),
+  panelW: document.getElementById('panelW'),
+  startLen: document.getElementById('startLen')
+};
+var canvas = document.getElementById('cv');
+var ctx = canvas.getContext('2d');
+var summaryEl = document.getElementById('summary');
+var tableHost = document.getElementById('tableHost');
+
+function compute(){
+  var roomX = Math.max(1, Number(els.roomX.value) || 0);
+  var roomY = Math.max(1, Number(els.roomY.value) || 0);
+  var panelLen = Math.max(1, Number(els.panelLen.value) || 0);
+  var panelW = Math.max(1, Number(els.panelW.value) || 0);
+  var startLen = Number(els.startLen.value) || 0;
+  if (startLen <= 0) startLen = panelLen;
+  if (startLen > panelLen) startLen = panelLen;
+
+  var numCols = Math.ceil(roomX / panelW);
+  var cols = [];
+  var carry = startLen;
+  var freshCount = 0;
+  var wasteFirstCut = panelLen - startLen;
+
+  for (var c = 0; c < numCols; c++){
+    var colX0 = c * panelW;
+    var colWidth = Math.min(panelW, roomX - colX0);
+    var pieces = [];
+    var pos = 0;
+    var pieceLen = carry;
+    var isCarried = (c > 0); // premier morceau de cette colonne vient-il d'une chute ?
+    var firstPieceOfCol = true;
+
+    while (pos < roomY - 0.001){
+      var fromFresh = !(firstPieceOfCol && isCarried);
+      if (fromFresh) freshCount++;
+      var end = pos + pieceLen;
+      if (end >= roomY - 0.001){
+        // ce morceau termine la colonne : on le coupe pile a la longueur necessaire
+        var used = roomY - pos;
+        var chute = pieceLen - used;
+        pieces.push({ start: pos, len: used, type: (firstPieceOfCol && isCarried) ? 'carried' : (chute > 0.5 ? 'cut' : 'full') });
+        pos = roomY;
+        carry = chute > 0.5 ? chute : panelLen; // chute reutilisee, sinon colonne suivante repart a neuf
+      } else {
+        pieces.push({ start: pos, len: pieceLen, type: (firstPieceOfCol && isCarried) ? 'carried' : 'full' });
+        pos = end;
+        pieceLen = panelLen; // prochain morceau = plaque neuve
+      }
+      firstPieceOfCol = false;
+    }
+    cols.push({ x0: colX0, width: colWidth, pieces: pieces });
+  }
+
+  var finalWaste = carry < panelLen ? carry : 0; // chute finale non reutilisee
+
+  return { roomX:roomX, roomY:roomY, panelLen:panelLen, panelW:panelW, startLen:startLen,
+           numCols:numCols, cols:cols, freshCount:freshCount, wasteFirstCut:wasteFirstCut, finalWaste:finalWaste };
+}
+
+function draw(data){
+  var marginL=50, marginT=20, marginB=34, marginR=20;
+  var plotW=640, plotH=plotW*(data.roomY/data.roomX);
+  canvas.width = plotW+marginL+marginR;
+  canvas.height = plotH+marginT+marginB;
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#f6f4ee';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  var sx = plotW/data.roomX, sy = plotH/data.roomY;
+
+  data.cols.forEach(function(col){
+    var x0 = marginL + col.x0*sx;
+    var w = col.width*sx;
+    col.pieces.forEach(function(p, i){
+      var y0 = marginT + p.start*sy;
+      var h = p.len*sy;
+      ctx.fillStyle = p.type==='carried' ? '#f0e6d8' : (i % 2 === 0 ? '#eae4d3' : '#e2dcc9');
+      ctx.fillRect(x0, y0, w-1, h-1);
+      ctx.strokeStyle = '#8a6240';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x0, y0, w-1, h-1);
+      if (h > 14){
+        ctx.fillStyle = '#1c1f1a';
+        ctx.font = '10px Helvetica, Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.save();
+        ctx.translate(x0+w/2, y0+h/2);
+        if (w < 40) ctx.rotate(-Math.PI/2);
+        ctx.fillText(Math.round(p.len)+'mm', 0, 3);
+        ctx.restore();
+      }
+    });
+  });
+
+  ctx.strokeStyle = '#1c1f1a';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(marginL, marginT, plotW, plotH);
+
+  ctx.font = '10px Helvetica, Arial, sans-serif';
+  ctx.fillStyle = '#1c1f1a';
+  ctx.textAlign = 'center';
+  data.cols.forEach(function(col){
+    var xc = marginL + (col.x0+col.width/2)*sx;
+    ctx.fillText(Math.round(col.x0), marginL + col.x0*sx, marginT+plotH+14);
+  });
+  ctx.fillText(Math.round(data.roomX), marginL+plotW, marginT+plotH+14);
+  ctx.save();
+  ctx.translate(14, marginT+plotH/2);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillText('Y (mm)', 0, 0);
+  ctx.restore();
+  ctx.fillText('X (mm)', marginL+plotW/2, marginT+plotH+28);
+}
+
+function renderTable(data){
+  var html = '<table><thead><tr><th>Colonne</th><th>X</th><th>Morceaux (bas vers haut)</th></tr></thead><tbody>';
+  data.cols.forEach(function(col, i){
+    var descr = col.pieces.map(function(p){
+      var cls = p.type==='carried' ? 'carried' : 'fresh';
+      var tag = p.type==='carried' ? ' (chute reprise)' : (p.type==='cut' ? ' (coupee)' : ' (pleine)');
+      return '<span class="'+cls+'">'+Math.round(p.len)+' mm'+tag+'</span>';
+    }).join(' + ');
+    html += '<tr><td class="col-label">'+(i+1)+'</td><td>'+Math.round(col.x0)+' - '+Math.round(col.x0+col.width)+'</td><td style="text-align:left;padding-left:10px;">'+descr+'</td></tr>';
+  });
+  html += '</tbody></table>';
+  html += '<p style="font-family:Helvetica,Arial,sans-serif;font-size:.72rem;color:#8a7c5c;margin-top:8px;">Marron italique = morceau recupere de la chute de la colonne precedente. Le dernier morceau de chaque colonne, sil nest pas une plaque pleine, genere la chute utilisee au debut de la colonne suivante.</p>';
+  tableHost.innerHTML = html;
+}
+
+function renderSummary(data){
+  summaryEl.innerHTML =
+    '<b>' + data.numCols + ' colonnes</b> de ' + data.panelW + ' mm (derniere: ' + Math.round(data.cols[data.cols.length-1].width) + ' mm)<br>' +
+    '<b>' + data.freshCount + ' plaques neuves</b> entamees au total<br>' +
+    'Chute du 1er decoupe (non reutilisee dans la cascade) : ' + Math.round(data.wasteFirstCut) + ' mm<br>' +
+    'Chute finale en fin de derniere colonne : ' + Math.round(data.finalWaste) + ' mm';
+}
+
+function update(){
+  var data = compute();
+  draw(data);
+  renderTable(data);
+  renderSummary(data);
+}
+
+Object.keys(els).forEach(function(k){ els[k].addEventListener('input', update); });
+update();
+
+})();
+</script>
+</body>
+</html>
