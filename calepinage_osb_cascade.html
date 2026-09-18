@@ -46,6 +46,15 @@
       <option value="y" selected>Longueur plaque sur la largeur piece (Y)</option>
     </select>
   </div>
+  <div class="field">
+    <label>Coin de depart</label>
+    <select id="corner" style="padding:5px 7px;font-size:.9rem;border:1px solid var(--line);border-radius:3px;">
+      <option value="bl" selected>Bas-gauche</option>
+      <option value="br">Bas-droite</option>
+      <option value="tl">Haut-gauche</option>
+      <option value="tr">Haut-droite</option>
+    </select>
+  </div>
 </div>
 
 <div class="wrap">
@@ -71,7 +80,8 @@ var els = {
   panelW: document.getElementById('panelW'),
   startLen: document.getElementById('startLen'),
   startWidth: document.getElementById('startWidth'),
-  orientation: document.getElementById('orientation')
+  orientation: document.getElementById('orientation'),
+  corner: document.getElementById('corner')
 };
 var canvas = document.getElementById('cv');
 var ctx = canvas.getContext('2d');
@@ -86,6 +96,9 @@ function compute(){
   var startLen = Number(els.startLen.value) || 0;
   var startWidth = Number(els.startWidth.value) || 0;
   var colsAlongX = els.orientation.value === 'y'; // longueur plaque sur Y => colonnes decoupees dans X
+  var corner = els.corner.value; // bl, br, tl, tr
+  var startFromRightX = (corner === 'br' || corner === 'tr');
+  var startFromTopY = (corner === 'tl' || corner === 'tr');
   if (startLen <= 0) startLen = panelLen;
   if (startLen > panelLen) startLen = panelLen;
   if (startWidth <= 0) startWidth = panelW;
@@ -93,8 +106,10 @@ function compute(){
 
   var colDimTotal = colsAlongX ? roomX : roomY;      // dimension decoupee en colonnes (largeur de plaque)
   var cascadeDimTotal = colsAlongX ? roomY : roomX;  // dimension remplie en cascade (longueur de plaque)
+  var colDirReversed = colsAlongX ? startFromRightX : startFromTopY;
+  var cascadeDirReversed = colsAlongX ? startFromTopY : startFromRightX;
 
-  // --- decoupage des colonnes le long de colDimTotal ---
+  // --- decoupage des colonnes le long de colDimTotal (coordonnees internes, depart = coin choisi) ---
   var colWidths = [];
   var used = 0;
   var first = true;
@@ -136,7 +151,12 @@ function compute(){
       }
       firstPieceOfCol = false;
     }
-    cols.push({ colPos: colPos, colWidth: cw, pieces: pieces });
+    // transformation des coordonnees internes -> position physique selon le coin de depart
+    var physColPos = colDirReversed ? (colDimTotal - colPos - cw) : colPos;
+    pieces.forEach(function(p){
+      p.pos = cascadeDirReversed ? (cascadeDimTotal - p.pos - p.len) : p.pos;
+    });
+    cols.push({ colPos: physColPos, colWidth: cw, pieces: pieces });
     colPos += cw;
   }
 
@@ -169,9 +189,9 @@ function draw(data){
     col.pieces.forEach(function(p, i){
       var rect;
       if (data.colsAlongX){
-        rect = { x: marginL + col.colPos*sx, y: marginT + p.pos*sy, w: col.colWidth*sx, h: p.len*sy };
+        rect = { x: marginL + col.colPos*sx, y: marginT + plotH - (p.pos+p.len)*sy, w: col.colWidth*sx, h: p.len*sy };
       } else {
-        rect = { x: marginL + p.pos*sx, y: marginT + col.colPos*sy, w: p.len*sx, h: col.colWidth*sy };
+        rect = { x: marginL + p.pos*sx, y: marginT + plotH - (col.colPos+col.colWidth)*sy, w: p.len*sx, h: col.colWidth*sy };
       }
       ctx.fillStyle = p.type==='carried' ? '#f0e6d8' : (i % 2 === 0 ? '#eae4d3' : '#e2dcc9');
       ctx.fillRect(rect.x, rect.y, rect.w-1, rect.h-1);
@@ -194,6 +214,18 @@ function draw(data){
   ctx.strokeStyle = '#1c1f1a';
   ctx.lineWidth = 1;
   ctx.strokeRect(marginL, marginT, plotW, plotH);
+
+  // marqueur du coin de depart
+  var corner = els.corner.value;
+  var sxc = (corner === 'br' || corner === 'tr') ? marginL+plotW : marginL;
+  var syc = (corner === 'tl' || corner === 'tr') ? marginT : marginT+plotH;
+  ctx.beginPath();
+  ctx.arc(sxc, syc, 5, 0, Math.PI*2);
+  ctx.fillStyle = '#fff';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#1c1f1a';
+  ctx.stroke();
 
   ctx.font = '10px Helvetica, Arial, sans-serif';
   ctx.fillStyle = '#1c1f1a';
@@ -241,7 +273,7 @@ function update(){
 }
 
 Object.keys(els).forEach(function(k){
-  var evt = (k === 'orientation') ? 'change' : 'input';
+  var evt = (k === 'orientation' || k === 'corner') ? 'change' : 'input';
   els[k].addEventListener(evt, update);
 });
 update();
